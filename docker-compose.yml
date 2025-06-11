@@ -1,0 +1,16 @@
+services:
+  postgres: 
+    image: postgres:16
+    container_name: repo_guardian_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: repoguardian
+      POSTGRES_USER: repoguardian
+      POSTGRES_PASSWORD:  repoguardian
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/li/postgresql/data
+
+volumes:
+  pgdata:
