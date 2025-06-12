@@ -2,7 +2,9 @@ import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
-
+import loggerMiddleware from './middlewares/loggerMiddleware'
+import scanRoutes from './routes/scanRoutes'
+import { errorHandler } from './middlewares/errorHandler'
 
 const app = express()
 
@@ -17,9 +19,11 @@ app.use(
   })
 );
 
-app.use()
+app.use(loggerMiddleware)
 
-app.use()
+app.use('/api/scan', scanRoutes);
+
+app.use(errorHandler)
 
 export default app;
 
