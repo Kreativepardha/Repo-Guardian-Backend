@@ -1,115 +1,153 @@
-import { runSemgrep } from "../services/semgrepService";
-import { runTrivy } from "../services/trivyService";
-import Prisma from "../config/client";
-import logger from "../utils/logger";
-import { runGitleaks } from "../services/gitLeaksService";
-import { error } from "winston";
-import { summarizeWithAI } from "../services/aiService";
+import { runSemgrep } from '../services/semgrepService';
+import { runTrivy } from '../services/trivyService';
+import { runGitleaks } from '../services/gitLeaksService';
+import { runSonarQube } from '../services/sonarQubeService';
+import { runNikto } from '../services/niktoService';
+import { runSnyk } from '../services/snykService';
+import { runClair } from '../services/clairService';
+import { runAnchore } from '../services/anchoreService';
+import { analyzeVulnerability } from '../services/aiService';
+import logger from '../utils/logger';
+import Prisma from '../config/client';
 
 interface ToolRunConfig {
   name: string;
-  runFn: (targetPath: string) => Promise<any>
+  runFn: (targetPath: string) => Promise<any>;
+  description: string;
 }
 
-
 const tools: ToolRunConfig[] = [
-  { name: 'semgrep', runFn: runSemgrep },
-  { name: 'gitleaks', runFn: runGitleaks },
-  { name: 'trivy', runFn: runTrivy },
+  {
+    name: 'semgrep',
+    runFn: runSemgrep,
+    description: 'Static Analysis Security Testing (SAST)'
+  },
+  {
+    name: 'gitleaks',
+    runFn: runGitleaks,
+    description: 'Secret Scanning'
+  },
+  {
+    name: 'trivy',
+    runFn: runTrivy,
+    description: 'Vulnerability Scanner'
+  },
+  {
+    name: 'sonarqube',
+    runFn: runSonarQube,
+    description: 'Code Quality and Security Analysis'
+  },
+  {
+    name: 'nikto',
+    runFn: runNikto,
+    description: 'Web Server Scanner'
+  },
+  {
+    name: 'snyk',
+    runFn: runSnyk,
+    description: 'Dependency and Container Scanning'
+  },
+  {
+    name: 'clair',
+    runFn: runClair,
+    description: 'Container Image Analysis'
+  },
+  {
+    name: 'anchore',
+    runFn: runAnchore,
+    description: 'Container Security Analysis'
+  }
 ];
 
-export async function runFullScan(scanId: number, localPath: string) {
-  logger.info("Starting FullScan", { scanId, localPath });
+export async function runFullScan(id: number, targetPath: string): Promise<void> {
+  logger.info('Starting full security scan', { targetPath });
+
+  // Create scan record
+  const scan = await Prisma.scan.create({
+    data: {
+      repoUrl: targetPath,
+      status: 'RUNNING'
+    }
+  });
 
   try {
     for (const tool of tools) {
-      logger.info(`Starting tool: ${tool.name}`, { scanId })
-
+      logger.info(`Running ${tool.name} scan`, { description: tool.description });
+      
+      // Create tool run record
       const toolRun = await Prisma.toolRun.create({
         data: {
-          scanId,
+          scanId: scan.id,
           toolName: tool.name,
           status: 'RUNNING'
         }
       });
 
-      logger.info('ToolRun Record Created', { 
-        scanId,
-        toolRunId: toolRun.id,
-        tool: tool.name
-      })
-
-
       try {
-        const rawResult = await tool.runFn(localPath)
+        // Execute tool
+        const rawResults = await tool.runFn(targetPath);
+        
+        // Get AI analysis
+        const analysis = await analyzeVulnerability(tool.name, rawResults);
+        logger.info(`AI analysis completed for ${tool.name}`, {
+          analysisSize: JSON.stringify(analysis).length
+        });
 
-        logger.info('Tool Execution Completed', {
-          scanId,
-          toolRunId: toolRun.id,
-          tool: tool.name,
-          resultSize: JSON.stringify(rawResult).length
-        })
-        const aiSummary = await summarizeWithAI(tool.name, rawResult);
-
-        logger.info('Ai Summary Generated', {
-          scanId,
-          toolRunId: toolRun.id,
-          tool: tool.name,
-          summarySize: JSON.stringify(aiSummary).length
-        })
-
+        // Update tool run record
         await Prisma.toolRun.update({
           where: { id: toolRun.id },
           data: {
             status: 'COMPLETED',
             output: {
-              raw: rawResult,
-              aiSummary,
+              raw: rawResults,
+              analysis: analysis
             }
           }
         });
 
-        logger.info(`ToolRun ${tool.name} COMPLETED`, {
-          scanId,
-          toolRunId: toolRun.id,
-        });
-
-      } catch (err) {
+      } catch (error) {
         logger.error(`Tool ${tool.name} failed`, {
-          scanId,
-          toolRunId: toolRun.id,
-          error:  err instanceof Error ? err.message : String(err),
+          error: error instanceof Error ? error.message : 'Unknown error',
+          stack: error instanceof Error ? error.stack : undefined
         });
 
+        // Update tool run record with error
         await Prisma.toolRun.update({
           where: { id: toolRun.id },
           data: {
             status: 'FAILED',
             output: {
-              error: err instanceof Error ? err.message : 'Unknown Error',
-              stack: err instanceof Error ? err.stack : undefined,
-            },
+              error: error instanceof Error ? error.message : 'Unknown error',
+              stack: error instanceof Error ? error.stack : undefined
+            }
           }
-        })
+        });
       }
     }
 
-
-
+    // Update scan status to completed
     await Prisma.scan.update({
-      where: { id: scanId },
-      data: { status: 'COMPLETED' }
+      where: { id: scan.id },
+      data: {
+        status: 'COMPLETED'
+      }
     });
-    logger.info('Scan COMPLETED successfully', { scanId });
-  } catch (err) {
-    logger.error('scan runner failed', {
-      scanId, error: err
-    })
 
+  } catch (error) {
+    logger.error('Full scan failed', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : undefined
+    });
+
+    // Update scan status to failed
     await Prisma.scan.update({
-      where: { id: scanId },
-      data: { status: 'FAILED' },
-    })
+      where: { id: scan.id },
+      data: {
+        status: 'FAILED'
+      }
+    });
+
+    throw error;
   }
 }
 

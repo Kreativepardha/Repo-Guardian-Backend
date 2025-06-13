@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: repoguardian
       POSTGRES_PASSWORD:  repoguardian
     ports:
-      - '5432:5432'
+      - '5433:5432'
     volumes:
       - pgdata:/var/li/postgresql/data
 
